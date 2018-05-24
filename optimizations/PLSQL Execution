@@ -1,0 +1,19 @@
+How Does Oracle Execute PL/SQL Code?
+
+PL/SQL runtime engine (a.k.a. PL/SQL Virtual Machine) is the database component that executes a
+PL/SQL program’s bytecode. 
+In this virtual machine, the bytecode of a PL/SQL program is translated to machine code 
+that makes calls to the database server and returns results to the calling environment. 
+
+The PVM itself is written in C. Historically, Oracle has included a PVM in some client-side tools such as Oracle Forms,
+where the runtime engine opens a session to a remote database, communicating
+with the SQL engine over a networking protocol.
+
+Database session
+-----------------
+(server-side) PL/SQL, the database session is the process and memory
+space associated with an authenticated user connection. 
+Each session has its own memory area where it can hold an executing program’s data. 
+Sessions begin with logon and end with logoff. 
+The sessions connected to a database are visible through the view V$SESSION.
+
