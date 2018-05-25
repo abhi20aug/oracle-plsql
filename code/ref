@@ -1,0 +1,892 @@
+SET define OFF
+
+CREATE OR REPLACE PACKAGE BODY xxmjf_om_cont_config
+IS
+   /***************************************************************************
+   * File name       : xxmjf_om_cont_config.pkb
+   * Author          : Arun Sharma
+   * Created         : 26-Nov-2014
+   * Description     : Used to Container Configuration
+   *+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+   *  Date          Author          Version     Reason
+   * +++++++++++   +++++++++++     +++++++++++ +++++++++++
+   * 26-Nov-2014   Arun Sharma        1.0       Initial creation
+   *****************************************************************************/
+   /*FUNCTION fun_debug (
+      pi_1   VARCHAR2 DEFAULT NULL
+     ,pi_2   VARCHAR2 DEFAULT NULL
+   )
+      RETURN NUMBER
+   IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+   BEGIN
+      INSERT INTO xxmjf_debug_temp
+           VALUES (pi_1
+                  ,pi_2
+                  );
+
+      COMMIT;
+      RETURN 0;
+   END fun_debug;*/
+
+   -- +====================================================================+
+-- | Function Name:  fun_delivery_created                               |
+-- |                                                                    |
+-- | Description:                                                       |
+-- |                                                                    |
+-- |                                                                    |
+-- |Change Record:                                                      |
+-- |===============                                                     |
+-- |Version    Date           Author             Remarks                |
+-- |=======    ==========    =============      ========================|
+-- |1.0        05-JAN-2014   IBM - Arun         Initial Version         |
+-- +====================================================================+
+   FUNCTION fun_delivery_created (
+      p_header_id   IN   NUMBER
+   )
+      RETURN VARCHAR2
+   IS
+      --
+      li_header_id   NUMBER;
+      li_dummy       NUMBER;
+   --
+   BEGIN
+      li_header_id := p_header_id;
+
+      SELECT COUNT (*)
+        INTO li_dummy
+        FROM wsh_new_deliveries wnd
+            ,wsh_delivery_assignments wda
+            ,wsh_delivery_details wdd
+       WHERE 1 = 1
+         AND wdd.source_header_id = li_header_id
+         AND wda.delivery_id = wnd.delivery_id
+         AND wda.delivery_detail_id = wdd.delivery_detail_id;
+
+      IF li_dummy > 0
+      THEN
+         RETURN 'Y';
+      ELSE
+         RETURN 'N';
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         RETURN 'N';
+   END fun_delivery_created;
+
+-- +====================================================================+
+-- | Function Name:  prc_autocreate_deliveries                          |
+-- |                                                                    |
+-- | Description:                                                       |
+-- |                                                                    |
+-- |                                                                    |
+-- |Change Record:                                                      |
+-- |===============                                                     |
+-- |Version    Date           Author             Remarks                |
+-- |=======    ==========    =============      ========================|
+-- |1.0        05-JAN-2014   IBM - Arun         Initial Version         |
+-- +====================================================================+
+   PROCEDURE prc_autocreate_deliveries (
+      p_delivery_detail_ids   IN       wsh_util_core.id_tab_type
+     ,x_delivery_id           OUT      NUMBER
+     ,x_return_status         OUT      VARCHAR2
+     ,x_error_message         OUT      VARCHAR2
+   )
+   IS
+--
+      li_msg_summary          VARCHAR2 (2000);
+      li_msg_details          VARCHAR2 (4000);
+      --
+      li_index                NUMBER;
+      li_dummy                NUMBER;
+      -- WSH_DELIVERY_DETAILS_PUB API IN Parameters
+      li_api_version_number   NUMBER                    := 1.0;
+      li_init_msg_list        VARCHAR2 (30);
+      li_commit               VARCHAR2 (30);
+      li_line_rows            wsh_util_core.id_tab_type;
+      -- WSH_DELIVERY_DETAILS_PUB API OUT Parameters
+      lx_msg_count            NUMBER;
+      lx_msg_data             VARCHAR2 (32767);
+      lx_return_status        VARCHAR2 (30);
+      lx_del_rows             wsh_util_core.id_tab_type;
+   --
+   BEGIN
+      lx_return_status := wsh_util_core.g_ret_sts_success;
+      li_line_rows := p_delivery_detail_ids;
+      li_index := li_line_rows.FIRST;
+      --
+      wsh_delivery_details_pub.autocreate_deliveries (p_api_version_number      => li_api_version_number
+                                                     ,p_init_msg_list           => li_init_msg_list
+                                                     ,p_commit                  => li_commit
+                                                     ,p_line_rows               => li_line_rows
+                                                     -- OUT PARAMETERS
+      ,                                               x_return_status           => lx_return_status
+                                                     ,x_msg_count               => lx_msg_count
+                                                     ,x_msg_data                => lx_msg_data
+                                                     ,x_del_rows                => lx_del_rows
+                                                     );
+
+      --
+      IF (lx_return_status <> fnd_api.g_ret_sts_success)
+      THEN
+         ROLLBACK;
+         wsh_util_core.get_messages ('Y'
+                                    ,li_msg_summary
+                                    ,li_msg_details
+                                    ,lx_msg_count
+                                    );
+
+         IF lx_msg_count > 1
+         THEN
+            lx_msg_data :=    li_msg_summary
+                           || li_msg_details;
+         ELSE
+            lx_msg_data := li_msg_summary;
+         END IF;
+
+         x_error_message := lx_msg_data;
+         x_return_status := 'E';
+      ELSE
+         COMMIT;
+         x_delivery_id := lx_del_rows (1);
+         x_return_status := 'S';
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ROLLBACK;
+         x_return_status := 'E';
+         x_error_message :=    SQLCODE
+                            || ':'
+                            || SQLERRM;
+   END prc_autocreate_deliveries;
+
+-- +====================================================================+
+-- | Function Name:  prc_assign_deliveries                              |
+-- |                                                                    |
+-- | Description:                                                       |
+-- |                                                                    |
+-- |                                                                    |
+-- |Change Record:                                                      |
+-- |===============                                                     |
+-- |Version    Date           Author             Remarks                |
+-- |=======    ==========    =============      ========================|
+-- |1.0        05-JAN-2014   IBM - Arun         Initial Version         |
+-- +====================================================================+
+   PROCEDURE prc_assign_deliveries (
+      p_delivery_id           IN       NUMBER
+     ,p_delivery_detail_ids   IN       wsh_delivery_details_pub.id_tab_type
+     ,x_return_status         OUT      VARCHAR2
+     ,x_error_message         OUT      VARCHAR2
+   )
+   IS
+--
+      li_msg_summary          VARCHAR2 (2000);
+      li_msg_details          VARCHAR2 (4000);
+      --
+      li_index                NUMBER;
+      li_dummy                NUMBER;
+      -- WSH_DELIVERY_DETAILS_PUB API IN Parameters
+      li_api_version_number   NUMBER                               := 1.0;
+      li_init_msg_list        VARCHAR2 (30);
+      li_commit               VARCHAR2 (30);
+      li_action               VARCHAR2 (30);
+      li_line_rows            wsh_delivery_details_pub.id_tab_type;
+      li_delivery_id          NUMBER;
+      -- WSH_DELIVERY_DETAILS_PUB API OUT Parameters
+      lx_msg_count            NUMBER;
+      lx_msg_data             VARCHAR2 (32767);
+      lx_return_status        VARCHAR2 (30);
+   --
+   BEGIN
+      --
+      lx_return_status := wsh_util_core.g_ret_sts_success;
+      li_line_rows := p_delivery_detail_ids;
+      li_delivery_id := p_delivery_id;
+      li_action := 'ASSIGN';
+      li_index := li_line_rows.FIRST;
+      --
+      wsh_delivery_details_pub.detail_to_delivery (p_api_version        => li_api_version_number
+                                                  ,p_init_msg_list      => li_init_msg_list
+                                                  ,p_commit             => li_commit
+                                                  ,p_tabofdeldets       => li_line_rows
+                                                  ,p_action             => li_action
+                                                  ,p_delivery_id        => li_delivery_id
+                                                  -- OUT PARAMETERS
+      ,                                            x_return_status      => lx_return_status
+                                                  ,x_msg_count          => lx_msg_count
+                                                  ,x_msg_data           => lx_msg_data
+                                                  );
+
+      --
+      IF (lx_return_status <> fnd_api.g_ret_sts_success)
+      THEN
+         ROLLBACK;
+         wsh_util_core.get_messages ('Y'
+                                    ,li_msg_summary
+                                    ,li_msg_details
+                                    ,lx_msg_count
+                                    );
+
+         IF lx_msg_count > 1
+         THEN
+            lx_msg_data :=    li_msg_summary
+                           || li_msg_details;
+         ELSE
+            lx_msg_data := li_msg_summary;
+         END IF;
+
+         x_error_message := lx_msg_data;
+         x_return_status := 'E';
+      ELSE
+         COMMIT;
+         x_return_status := 'S';
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ROLLBACK;
+         x_return_status := 'E';
+         x_error_message :=    SQLCODE
+                            || ':'
+                            || SQLERRM;
+   END prc_assign_deliveries;
+
+-- +====================================================================+
+-- | Function Name:  prc_unassign_deliveries                            |
+-- |                                                                    |
+-- | Description:                                                       |
+-- |                                                                    |
+-- |                                                                    |
+-- |Change Record:                                                      |
+-- |===============                                                     |
+-- |Version    Date           Author             Remarks                |
+-- |=======    ==========    =============      ========================|
+-- |1.0        05-JAN-2014   IBM - Arun         Initial Version         |
+-- +====================================================================+
+   PROCEDURE prc_unassign_deliveries (
+      p_delivery_id           IN       NUMBER
+     ,p_delivery_detail_ids   IN       wsh_delivery_details_pub.id_tab_type
+     ,x_return_status         OUT      VARCHAR2
+     ,x_error_message         OUT      VARCHAR2
+   )
+   IS
+--
+      li_msg_summary          VARCHAR2 (2000);
+      li_msg_details          VARCHAR2 (4000);
+      --
+      li_index                NUMBER;
+      li_dummy                NUMBER;
+      -- WSH_DELIVERY_DETAILS_PUB API IN Parameters
+      li_api_version_number   NUMBER                               := 1.0;
+      li_init_msg_list        VARCHAR2 (30);
+      li_commit               VARCHAR2 (30);
+      li_action               VARCHAR2 (30);
+      li_line_rows            wsh_delivery_details_pub.id_tab_type;
+      li_delivery_id          NUMBER;
+      -- WSH_DELIVERY_DETAILS_PUB API OUT Parameters
+      lx_msg_count            NUMBER;
+      lx_msg_data             VARCHAR2 (32767);
+      lx_return_status        VARCHAR2 (30);
+   --
+   BEGIN
+      --
+      lx_return_status := wsh_util_core.g_ret_sts_success;
+      li_line_rows := p_delivery_detail_ids;
+      li_delivery_id := p_delivery_id;
+      li_action := 'UNASSIGN';
+      li_index := li_line_rows.FIRST;
+      --
+      wsh_delivery_details_pub.detail_to_delivery (p_api_version        => li_api_version_number
+                                                  ,p_init_msg_list      => li_init_msg_list
+                                                  ,p_commit             => li_commit
+                                                  ,p_tabofdeldets       => li_line_rows
+                                                  ,p_action             => li_action
+                                                  ,p_delivery_id        => li_delivery_id
+                                                  -- OUT PARAMETERS
+      ,                                            x_return_status      => lx_return_status
+                                                  ,x_msg_count          => lx_msg_count
+                                                  ,x_msg_data           => lx_msg_data
+                                                  );
+
+      --
+      IF (lx_return_status <> fnd_api.g_ret_sts_success)
+      THEN
+         ROLLBACK;
+         wsh_util_core.get_messages ('Y'
+                                    ,li_msg_summary
+                                    ,li_msg_details
+                                    ,lx_msg_count
+                                    );
+
+         IF lx_msg_count > 1
+         THEN
+            lx_msg_data :=    li_msg_summary
+                           || li_msg_details;
+         ELSE
+            lx_msg_data := li_msg_summary;
+         END IF;
+
+         x_error_message := lx_msg_data;
+         x_return_status := 'E';
+      ELSE
+         COMMIT;
+         x_return_status := 'S';
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ROLLBACK;
+         x_return_status := 'E';
+         x_error_message :=    SQLCODE
+                            || ':'
+                            || SQLERRM;
+   END prc_unassign_deliveries;
+
+-- +====================================================================+
+-- | Function Name:  prc_cancel_order_line                              |
+-- |                                                                    |
+-- | Description:                                                       |
+-- |                                                                    |
+-- |                                                                    |
+-- |Change Record:                                                      |
+-- |===============                                                     |
+-- |Version    Date           Author             Remarks                |
+-- |=======    ==========    =============      ========================|
+-- |1.0        05-JAN-2014   IBM - Arun         Initial Version         |
+-- +====================================================================+
+   PROCEDURE prc_cancel_order_line (
+      p_user_id         IN       NUMBER
+     ,p_org_id          IN       NUMBER
+     ,p_header_id       IN       NUMBER
+     ,p_line_id         IN       NUMBER
+     ,p_qty             IN       NUMBER
+     ,x_return_status   OUT      VARCHAR2
+     ,x_error_message   OUT      VARCHAR2
+   )
+   IS
+      --
+      li_user_id                  NUMBER;
+      li_org_id                   NUMBER;
+      li_header_id                NUMBER;
+      li_line_id                  NUMBER;
+      li_qty                      NUMBER;
+      --
+      lv_user_id                  NUMBER;
+      lv_resp_id                  NUMBER;
+      lv_resp_appl_id             NUMBER;
+      --
+      l_line_tbl_index            NUMBER;
+      lx_msg_index                NUMBER;
+      li_msg_summary              VARCHAR2 (2000);
+      li_msg_details              VARCHAR2 (4000);
+      -- OE_ORDER_PUB API IN Parameters
+      pi_api_version_number       NUMBER                                   := 1.0;
+      pi_header_rec               oe_order_pub.header_rec_type;
+      pi_line_tbl                 oe_order_pub.line_tbl_type;
+      pi_action_request_tbl       oe_order_pub.request_tbl_type;
+      pi_line_adj_tbl             oe_order_pub.line_adj_tbl_type;
+      -- OE_ORDER_PUB API OUT Parameters
+      px_return_status            VARCHAR2 (30);
+      px_msg_count                NUMBER;
+      px_msg_data                 VARCHAR2 (32767);
+      px_header_rec               oe_order_pub.header_rec_type;
+      px_header_val_rec           oe_order_pub.header_val_rec_type;
+      px_header_adj_tbl           oe_order_pub.header_adj_tbl_type;
+      px_header_adj_val_tbl       oe_order_pub.header_adj_val_tbl_type;
+      px_header_price_att_tbl     oe_order_pub.header_price_att_tbl_type;
+      px_header_adj_att_tbl       oe_order_pub.header_adj_att_tbl_type;
+      px_header_adj_assoc_tbl     oe_order_pub.header_adj_assoc_tbl_type;
+      px_header_scredit_tbl       oe_order_pub.header_scredit_tbl_type;
+      px_header_scredit_val_tbl   oe_order_pub.header_scredit_val_tbl_type;
+      px_line_tbl                 oe_order_pub.line_tbl_type;
+      px_line_val_tbl             oe_order_pub.line_val_tbl_type;
+      px_line_adj_tbl             oe_order_pub.line_adj_tbl_type;
+      px_line_adj_val_tbl         oe_order_pub.line_adj_val_tbl_type;
+      px_line_price_att_tbl       oe_order_pub.line_price_att_tbl_type;
+      px_line_adj_att_tbl         oe_order_pub.line_adj_att_tbl_type;
+      px_line_adj_assoc_tbl       oe_order_pub.line_adj_assoc_tbl_type;
+      px_line_scredit_tbl         oe_order_pub.line_scredit_tbl_type;
+      px_line_scredit_val_tbl     oe_order_pub.line_scredit_val_tbl_type;
+      px_lot_serial_tbl           oe_order_pub.lot_serial_tbl_type;
+      px_lot_serial_val_tbl       oe_order_pub.lot_serial_val_tbl_type;
+      px_action_request_tbl       oe_order_pub.request_tbl_type;
+   --
+   BEGIN
+      --
+      li_user_id := p_user_id;
+      li_org_id := p_org_id;
+      li_header_id := p_header_id;
+      li_line_id := p_line_id;
+      li_qty := p_qty;
+
+      -- Initialize Context
+      SELECT fu.user_id
+            ,frt.responsibility_id
+            ,frt.application_id
+        INTO lv_user_id
+            ,lv_resp_id
+            ,lv_resp_appl_id
+        FROM fnd_user fu
+            ,fnd_responsibility_tl frt
+       WHERE 1 = 1
+         AND fu.user_id = li_user_id
+         AND frt.responsibility_name = 'Order Management Super User';
+
+      fnd_global.apps_initialize (user_id           => lv_user_id
+                                 ,resp_id           => lv_resp_id
+                                 ,resp_appl_id      => lv_resp_appl_id
+                                 );
+      mo_global.init ('ONT');
+      mo_global.set_org_context (li_org_id
+                                ,NULL
+                                ,'ONT'
+                                );
+      fnd_global.set_nls_context ('AMERICAN');
+      mo_global.set_policy_context ('S', li_org_id);
+      --
+      pi_action_request_tbl (1) := oe_order_pub.g_miss_request_rec;
+      pi_line_tbl (1) := oe_order_pub.g_miss_line_rec;
+      pi_line_tbl (1).header_id := li_header_id;
+      pi_line_tbl (1).line_id := li_line_id;
+      pi_line_tbl (1).ordered_quantity := 0;
+      pi_line_tbl (1).cancelled_flag := 'Y';
+      pi_line_tbl (1).change_reason := 'Not provided';
+      pi_line_tbl (1).change_comments := 'CANCEL ORDER';
+      pi_line_tbl (1).operation := oe_globals.g_opr_update;
+      --
+      oe_msg_pub.delete_msg;
+      --
+      oe_order_pub.process_order (p_api_version_number          => pi_api_version_number
+                                 ,p_header_rec                  => pi_header_rec
+                                 ,p_line_tbl                    => pi_line_tbl
+                                 ,p_action_request_tbl          => pi_action_request_tbl
+                                 ,p_line_adj_tbl                => pi_line_adj_tbl
+                                 -- OUT PARAMETERS
+      ,                           x_header_rec                  => px_header_rec
+                                 ,x_header_val_rec              => px_header_val_rec
+                                 ,x_header_adj_tbl              => px_header_adj_tbl
+                                 ,x_header_adj_val_tbl          => px_header_adj_val_tbl
+                                 ,x_header_price_att_tbl        => px_header_price_att_tbl
+                                 ,x_header_adj_att_tbl          => px_header_adj_att_tbl
+                                 ,x_header_adj_assoc_tbl        => px_header_adj_assoc_tbl
+                                 ,x_header_scredit_tbl          => px_header_scredit_tbl
+                                 ,x_header_scredit_val_tbl      => px_header_scredit_val_tbl
+                                 ,x_line_tbl                    => px_line_tbl
+                                 ,x_line_val_tbl                => px_line_val_tbl
+                                 ,x_line_adj_tbl                => px_line_adj_tbl
+                                 ,x_line_adj_val_tbl            => px_line_adj_val_tbl
+                                 ,x_line_price_att_tbl          => px_line_price_att_tbl
+                                 ,x_line_adj_att_tbl            => px_line_adj_att_tbl
+                                 ,x_line_adj_assoc_tbl          => px_line_adj_assoc_tbl
+                                 ,x_line_scredit_tbl            => px_line_scredit_tbl
+                                 ,x_line_scredit_val_tbl        => px_line_scredit_val_tbl
+                                 ,x_lot_serial_tbl              => px_lot_serial_tbl
+                                 ,x_lot_serial_val_tbl          => px_lot_serial_val_tbl
+                                 ,x_action_request_tbl          => px_action_request_tbl
+                                 ,x_return_status               => px_return_status
+                                 ,x_msg_count                   => px_msg_count
+                                 ,x_msg_data                    => px_msg_data
+                                 );
+      --
+      x_return_status := px_return_status;
+
+      IF px_return_status = fnd_api.g_ret_sts_success
+      THEN
+         COMMIT;
+      ELSE
+         ROLLBACK;
+
+         FOR i IN 1 .. px_msg_count
+         LOOP
+            px_msg_data := oe_msg_pub.get (p_msg_index      => i, p_encoded => 'F');
+            x_error_message :=    x_error_message
+                               || px_msg_data;
+         END LOOP;
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ROLLBACK;
+         x_return_status := 'E';
+         x_error_message :=    SQLCODE
+                            || ':'
+                            || SQLERRM;
+   END prc_cancel_order_line;
+
+-- +====================================================================+
+-- | Function Name:  prc_split_order_line                               |
+-- |                                                                    |
+-- | Description:                                                       |
+-- |                                                                    |
+-- |                                                                    |
+-- |Change Record:                                                      |
+-- |===============                                                     |
+-- |Version    Date           Author             Remarks                |
+-- |=======    ==========    =============      ========================|
+-- |1.0        05-JAN-2014   IBM - Arun         Initial Version         |
+-- +====================================================================+
+   PROCEDURE prc_split_order_line (
+      p_user_id         IN       NUMBER
+     ,p_org_id          IN       NUMBER
+     ,p_header_id       IN       NUMBER
+     ,p_line_tbl        IN       type_line_tab
+     ,x_return_status   OUT      VARCHAR2
+     ,x_error_message   OUT      VARCHAR2
+   )
+   IS
+      --
+      li_user_id                  NUMBER;
+      li_org_id                   NUMBER;
+      li_header_id                NUMBER;
+      li_line_tbl                 type_line_tab;
+      --
+      lv_user_id                  NUMBER;
+      lv_resp_id                  NUMBER;
+      lv_resp_appl_id             NUMBER;
+      lv_index                    NUMBER;
+      lv_dummy                    NUMBER;
+      --
+      l_line_tbl_index            NUMBER;
+      lx_msg_index                NUMBER;
+      li_msg_summary              VARCHAR2 (2000);
+      li_msg_details              VARCHAR2 (4000);
+      -- OE_ORDER_PUB API IN Parameters
+      pi_api_version_number       NUMBER                                   := 1.0;
+      pi_header_rec               oe_order_pub.header_rec_type;
+      pi_line_tbl                 oe_order_pub.line_tbl_type;
+      pi_action_request_tbl       oe_order_pub.request_tbl_type;
+      pi_line_adj_tbl             oe_order_pub.line_adj_tbl_type;
+      -- OE_ORDER_PUB API OUT Parameters
+      px_return_status            VARCHAR2 (30);
+      px_msg_count                NUMBER;
+      px_msg_data                 VARCHAR2 (32767);
+      px_header_rec               oe_order_pub.header_rec_type;
+      px_header_val_rec           oe_order_pub.header_val_rec_type;
+      px_header_adj_tbl           oe_order_pub.header_adj_tbl_type;
+      px_header_adj_val_tbl       oe_order_pub.header_adj_val_tbl_type;
+      px_header_price_att_tbl     oe_order_pub.header_price_att_tbl_type;
+      px_header_adj_att_tbl       oe_order_pub.header_adj_att_tbl_type;
+      px_header_adj_assoc_tbl     oe_order_pub.header_adj_assoc_tbl_type;
+      px_header_scredit_tbl       oe_order_pub.header_scredit_tbl_type;
+      px_header_scredit_val_tbl   oe_order_pub.header_scredit_val_tbl_type;
+      px_line_tbl                 oe_order_pub.line_tbl_type;
+      px_line_val_tbl             oe_order_pub.line_val_tbl_type;
+      px_line_adj_tbl             oe_order_pub.line_adj_tbl_type;
+      px_line_adj_val_tbl         oe_order_pub.line_adj_val_tbl_type;
+      px_line_price_att_tbl       oe_order_pub.line_price_att_tbl_type;
+      px_line_adj_att_tbl         oe_order_pub.line_adj_att_tbl_type;
+      px_line_adj_assoc_tbl       oe_order_pub.line_adj_assoc_tbl_type;
+      px_line_scredit_tbl         oe_order_pub.line_scredit_tbl_type;
+      px_line_scredit_val_tbl     oe_order_pub.line_scredit_val_tbl_type;
+      px_lot_serial_tbl           oe_order_pub.lot_serial_tbl_type;
+      px_lot_serial_val_tbl       oe_order_pub.lot_serial_val_tbl_type;
+      px_action_request_tbl       oe_order_pub.request_tbl_type;
+   --
+   BEGIN
+      --
+      li_user_id := p_user_id;
+      li_org_id := p_org_id;
+      li_header_id := p_header_id;
+      li_line_tbl := p_line_tbl;
+
+      -- Initialize Context
+      SELECT fu.user_id
+            ,frt.responsibility_id
+            ,frt.application_id
+        INTO lv_user_id
+            ,lv_resp_id
+            ,lv_resp_appl_id
+        FROM fnd_user fu
+            ,fnd_responsibility_tl frt
+       WHERE 1 = 1
+         AND fu.user_id = li_user_id
+         AND frt.responsibility_name = 'Order Management Super User';
+
+      fnd_global.apps_initialize (user_id           => lv_user_id
+                                 ,resp_id           => lv_resp_id
+                                 ,resp_appl_id      => lv_resp_appl_id
+                                 );
+      mo_global.init ('ONT');
+      mo_global.set_org_context (li_org_id
+                                ,NULL
+                                ,'ONT'
+                                );
+      fnd_global.set_nls_context ('AMERICAN');
+      mo_global.set_policy_context ('S', li_org_id);
+      --
+      lv_index := li_line_tbl.FIRST;
+      --
+      pi_line_tbl (1) := oe_order_pub.g_miss_line_rec;
+      pi_line_tbl (1).operation := oe_globals.g_opr_update;
+      pi_line_tbl (1).split_by := li_user_id;
+      pi_line_tbl (1).split_action_code := 'SPLIT';
+      pi_line_tbl (1).header_id := li_header_id;
+      pi_line_tbl (1).line_id := li_line_tbl (lv_index).i_order_line_id;
+      pi_line_tbl (1).request_date := li_line_tbl (lv_index).i_reuqest_date;
+      --pi_line_tbl (1).line_number := li_line_tbl (lv_index).i_order_line_number;
+      pi_line_tbl (1).ordered_quantity := (  li_line_tbl (lv_index).i_ordered_quantity
+                                           - li_line_tbl (lv_index).i_split_quantity);
+      --
+      pi_line_tbl (2) := oe_order_pub.g_miss_line_rec;
+      pi_line_tbl (2).operation := oe_globals.g_opr_create;
+      pi_line_tbl (2).split_by := li_user_id;
+      pi_line_tbl (2).split_action_code := 'SPLIT';
+      pi_line_tbl (2).header_id := li_header_id;
+      pi_line_tbl (2).split_from_line_id := li_line_tbl (lv_index).i_order_line_id;
+      pi_line_tbl (2).ordered_quantity := li_line_tbl (lv_index).i_split_quantity;
+      --
+      pi_header_rec := oe_order_pub.g_miss_header_rec;
+      pi_header_rec.header_id := li_header_id;
+      pi_header_rec.operation := oe_globals.g_opr_update;
+      --
+      oe_msg_pub.delete_msg;
+      --
+      oe_order_pub.process_order (p_api_version_number          => pi_api_version_number
+                                 ,p_header_rec                  => pi_header_rec
+                                 ,p_line_tbl                    => pi_line_tbl
+                                 ,p_action_request_tbl          => pi_action_request_tbl
+                                 ,p_line_adj_tbl                => pi_line_adj_tbl
+                                 -- OUT PARAMETERS
+      ,                           x_header_rec                  => px_header_rec
+                                 ,x_header_val_rec              => px_header_val_rec
+                                 ,x_header_adj_tbl              => px_header_adj_tbl
+                                 ,x_header_adj_val_tbl          => px_header_adj_val_tbl
+                                 ,x_header_price_att_tbl        => px_header_price_att_tbl
+                                 ,x_header_adj_att_tbl          => px_header_adj_att_tbl
+                                 ,x_header_adj_assoc_tbl        => px_header_adj_assoc_tbl
+                                 ,x_header_scredit_tbl          => px_header_scredit_tbl
+                                 ,x_header_scredit_val_tbl      => px_header_scredit_val_tbl
+                                 ,x_line_tbl                    => px_line_tbl
+                                 ,x_line_val_tbl                => px_line_val_tbl
+                                 ,x_line_adj_tbl                => px_line_adj_tbl
+                                 ,x_line_adj_val_tbl            => px_line_adj_val_tbl
+                                 ,x_line_price_att_tbl          => px_line_price_att_tbl
+                                 ,x_line_adj_att_tbl            => px_line_adj_att_tbl
+                                 ,x_line_adj_assoc_tbl          => px_line_adj_assoc_tbl
+                                 ,x_line_scredit_tbl            => px_line_scredit_tbl
+                                 ,x_line_scredit_val_tbl        => px_line_scredit_val_tbl
+                                 ,x_lot_serial_tbl              => px_lot_serial_tbl
+                                 ,x_lot_serial_val_tbl          => px_lot_serial_val_tbl
+                                 ,x_action_request_tbl          => px_action_request_tbl
+                                 ,x_return_status               => px_return_status
+                                 ,x_msg_count                   => px_msg_count
+                                 ,x_msg_data                    => px_msg_data
+                                 );
+      --
+      x_return_status := px_return_status;
+
+      IF px_return_status = fnd_api.g_ret_sts_success
+      THEN
+         COMMIT;
+      ELSE
+         ROLLBACK;
+
+         FOR i IN 1 .. px_msg_count
+         LOOP
+            px_msg_data := oe_msg_pub.get (p_msg_index      => i, p_encoded => 'F');
+            x_error_message :=    x_error_message
+                               || px_msg_data;
+         END LOOP;
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ROLLBACK;
+         x_return_status := 'E';
+         x_error_message :=    SQLCODE
+                            || ':'
+                            || SQLERRM;
+   END prc_split_order_line;
+
+-- +====================================================================+
+-- | Function Name:  prc_update_order_line                              |
+-- |                                                                    |
+-- | Description:                                                       |
+-- |                                                                    |
+-- |                                                                    |
+-- |Change Record:                                                      |
+-- |===============                                                     |
+-- |Version    Date           Author             Remarks                |
+-- |=======    ==========    =============      ========================|
+-- |1.0        05-JAN-2014   IBM - Arun         Initial Version         |
+-- +====================================================================+
+   PROCEDURE prc_update_order_line (
+      p_user_id              IN       NUMBER
+     ,p_org_id               IN       NUMBER
+     ,p_header_id            IN       NUMBER
+     ,p_line_id              IN       NUMBER
+     ,p_quantity             IN       NUMBER DEFAULT NULL
+     ,p_schedule_ship_date   IN       DATE DEFAULT NULL
+     ,p_ship_method          IN       VARCHAR2 DEFAULT NULL
+     ,x_return_status        OUT      VARCHAR2
+     ,x_error_message        OUT      VARCHAR2
+   )
+   IS
+      --
+      li_user_id                  NUMBER;
+      li_org_id                   NUMBER;
+      li_header_id                NUMBER;
+      li_line_id                  NUMBER;
+      li_quantity                 NUMBER;
+      li_schedule_ship_date       DATE;
+      li_ship_method              VARCHAR2(30);
+      --
+      lv_user_id                  NUMBER;
+      lv_resp_id                  NUMBER;
+      lv_resp_appl_id             NUMBER;
+      --
+      l_line_tbl_index            NUMBER;
+      lx_msg_index                NUMBER;
+      li_msg_summary              VARCHAR2 (2000);
+      li_msg_details              VARCHAR2 (4000);
+      -- OE_ORDER_PUB API IN Parameters
+      pi_api_version_number       NUMBER                                   := 1.0;
+      pi_header_rec               oe_order_pub.header_rec_type;
+      pi_line_tbl                 oe_order_pub.line_tbl_type;
+      pi_action_request_tbl       oe_order_pub.request_tbl_type;
+      pi_line_adj_tbl             oe_order_pub.line_adj_tbl_type;
+      -- OE_ORDER_PUB API OUT Parameters
+      px_return_status            VARCHAR2 (30);
+      px_msg_count                NUMBER;
+      px_msg_data                 VARCHAR2 (32767);
+      px_header_rec               oe_order_pub.header_rec_type;
+      px_header_val_rec           oe_order_pub.header_val_rec_type;
+      px_header_adj_tbl           oe_order_pub.header_adj_tbl_type;
+      px_header_adj_val_tbl       oe_order_pub.header_adj_val_tbl_type;
+      px_header_price_att_tbl     oe_order_pub.header_price_att_tbl_type;
+      px_header_adj_att_tbl       oe_order_pub.header_adj_att_tbl_type;
+      px_header_adj_assoc_tbl     oe_order_pub.header_adj_assoc_tbl_type;
+      px_header_scredit_tbl       oe_order_pub.header_scredit_tbl_type;
+      px_header_scredit_val_tbl   oe_order_pub.header_scredit_val_tbl_type;
+      px_line_tbl                 oe_order_pub.line_tbl_type;
+      px_line_val_tbl             oe_order_pub.line_val_tbl_type;
+      px_line_adj_tbl             oe_order_pub.line_adj_tbl_type;
+      px_line_adj_val_tbl         oe_order_pub.line_adj_val_tbl_type;
+      px_line_price_att_tbl       oe_order_pub.line_price_att_tbl_type;
+      px_line_adj_att_tbl         oe_order_pub.line_adj_att_tbl_type;
+      px_line_adj_assoc_tbl       oe_order_pub.line_adj_assoc_tbl_type;
+      px_line_scredit_tbl         oe_order_pub.line_scredit_tbl_type;
+      px_line_scredit_val_tbl     oe_order_pub.line_scredit_val_tbl_type;
+      px_lot_serial_tbl           oe_order_pub.lot_serial_tbl_type;
+      px_lot_serial_val_tbl       oe_order_pub.lot_serial_val_tbl_type;
+      px_action_request_tbl       oe_order_pub.request_tbl_type;
+   --
+   BEGIN
+      --
+      li_user_id := p_user_id;
+      li_org_id := p_org_id;
+      li_header_id := p_header_id;
+      li_line_id := p_line_id;
+      li_quantity := p_quantity;
+      li_schedule_ship_date := p_schedule_ship_date;
+      li_ship_method := p_ship_method;
+
+      -- Initialize Context
+      SELECT fu.user_id
+            ,frt.responsibility_id
+            ,frt.application_id
+        INTO lv_user_id
+            ,lv_resp_id
+            ,lv_resp_appl_id
+        FROM fnd_user fu
+            ,fnd_responsibility_tl frt
+       WHERE 1 = 1
+         AND fu.user_id = li_user_id
+         AND frt.responsibility_name = 'Order Management Super User';
+
+      fnd_global.apps_initialize (user_id           => lv_user_id
+                                 ,resp_id           => lv_resp_id
+                                 ,resp_appl_id      => lv_resp_appl_id
+                                 );
+      mo_global.init ('ONT');
+      mo_global.set_org_context (li_org_id
+                                ,NULL
+                                ,'ONT'
+                                );
+      fnd_global.set_nls_context ('AMERICAN');
+      mo_global.set_policy_context ('S', li_org_id);
+      --
+      pi_action_request_tbl (1) := oe_order_pub.g_miss_request_rec;
+      pi_line_tbl (1) := oe_order_pub.g_miss_line_rec;
+      pi_line_tbl (1).header_id := li_header_id;
+      pi_line_tbl (1).line_id := li_line_id;
+
+      IF li_quantity IS NOT NULL
+      THEN
+         pi_line_tbl (1).ordered_quantity := li_quantity;
+      END IF;
+
+      IF li_schedule_ship_date IS NOT NULL
+      THEN
+         pi_line_tbl (1).schedule_ship_date := li_schedule_ship_date;
+      END IF;
+
+      IF li_ship_method IS NOT NULL
+      THEN
+         pi_line_tbl (1).shipping_method_code := li_ship_method;
+      END IF;
+
+      pi_line_tbl (1).change_reason := 'Not provided';
+      pi_line_tbl (1).operation := oe_globals.g_opr_update;
+      --
+      oe_msg_pub.delete_msg;
+      --
+      oe_order_pub.process_order (p_api_version_number          => pi_api_version_number
+                                 ,p_header_rec                  => pi_header_rec
+                                 ,p_line_tbl                    => pi_line_tbl
+                                 ,p_action_request_tbl          => pi_action_request_tbl
+                                 ,p_line_adj_tbl                => pi_line_adj_tbl
+                                 -- OUT PARAMETERS
+      ,                           x_header_rec                  => px_header_rec
+                                 ,x_header_val_rec              => px_header_val_rec
+                                 ,x_header_adj_tbl              => px_header_adj_tbl
+                                 ,x_header_adj_val_tbl          => px_header_adj_val_tbl
+                                 ,x_header_price_att_tbl        => px_header_price_att_tbl
+                                 ,x_header_adj_att_tbl          => px_header_adj_att_tbl
+                                 ,x_header_adj_assoc_tbl        => px_header_adj_assoc_tbl
+                                 ,x_header_scredit_tbl          => px_header_scredit_tbl
+                                 ,x_header_scredit_val_tbl      => px_header_scredit_val_tbl
+                                 ,x_line_tbl                    => px_line_tbl
+                                 ,x_line_val_tbl                => px_line_val_tbl
+                                 ,x_line_adj_tbl                => px_line_adj_tbl
+                                 ,x_line_adj_val_tbl            => px_line_adj_val_tbl
+                                 ,x_line_price_att_tbl          => px_line_price_att_tbl
+                                 ,x_line_adj_att_tbl            => px_line_adj_att_tbl
+                                 ,x_line_adj_assoc_tbl          => px_line_adj_assoc_tbl
+                                 ,x_line_scredit_tbl            => px_line_scredit_tbl
+                                 ,x_line_scredit_val_tbl        => px_line_scredit_val_tbl
+                                 ,x_lot_serial_tbl              => px_lot_serial_tbl
+                                 ,x_lot_serial_val_tbl          => px_lot_serial_val_tbl
+                                 ,x_action_request_tbl          => px_action_request_tbl
+                                 ,x_return_status               => px_return_status
+                                 ,x_msg_count                   => px_msg_count
+                                 ,x_msg_data                    => px_msg_data
+                                 );
+      --
+      x_return_status := px_return_status;
+
+      IF px_return_status = fnd_api.g_ret_sts_success
+      THEN
+         COMMIT;
+      ELSE
+         ROLLBACK;
+
+         FOR i IN 1 .. px_msg_count
+         LOOP
+            px_msg_data := oe_msg_pub.get (p_msg_index      => i, p_encoded => 'F');
+            x_error_message :=    x_error_message
+                               || px_msg_data;
+         END LOOP;
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ROLLBACK;
+         x_return_status := 'E';
+         x_error_message :=    SQLCODE
+                            || ':'
+                            || SQLERRM;
+   END prc_update_order_line;
+END xxmjf_om_cont_config;
